@@ -11,6 +11,7 @@ import { useModalControls } from 'utils/hooks'
 import desktopStyles from './NodeOverview.module.css'
 import mobileStyles from './NodeOverviewMobile.module.css'
 import { createStyles } from 'utils/mobile'
+import Loading from 'components/Loading'
 
 const styles = createStyles({ desktopStyles, mobileStyles })
 
@@ -36,14 +37,15 @@ const ServiceDetail = ({ label, value }: { label: string; value: string }) => {
 }
 
 type NodeOverviewProps = {
-  spID: number
-  serviceType: ServiceType
-  version: string
-  endpoint: string
-  operatorWallet: Address
-  delegateOwnerWallet: Address
-  isOwner: boolean
-  isDeregistered: boolean
+  spID?: number
+  serviceType?: ServiceType
+  version?: string
+  endpoint?: string
+  operatorWallet?: Address
+  delegateOwnerWallet?: Address
+  isOwner?: boolean
+  isDeregistered?: boolean
+  isLoading: boolean
 }
 
 const NodeOverview = ({
@@ -54,50 +56,69 @@ const NodeOverview = ({
   operatorWallet,
   delegateOwnerWallet,
   isOwner,
-  isDeregistered
+  isDeregistered,
+  isLoading
 }: NodeOverviewProps) => {
   const { isOpen, onClick, onClose } = useModalControls()
 
   return (
     <Paper className={styles.container}>
-      <div className={styles.header}>
-        <div className={styles.serviceType}>
-          {serviceType === ServiceType.DiscoveryProvider
-            ? messages.dp
-            : messages.cn}
-        </div>
-        {isDeregistered ? (
-          <div className={styles.deregistered}>{messages.deregistered}</div>
-        ) : (
-          <div className={styles.version}>
-            {`${messages.version} ${version}`}
+      {isLoading ? (
+        <Loading className={styles.loading} />
+      ) : (
+        <>
+          <div className={styles.header}>
+            <div className={styles.serviceType}>
+              {serviceType === ServiceType.DiscoveryProvider
+                ? messages.dp
+                : messages.cn}
+            </div>
+            {isDeregistered ? (
+              <div className={styles.deregistered}>{messages.deregistered}</div>
+            ) : (
+              <div className={styles.version}>
+                {`${messages.version} ${version || ''}`}
+              </div>
+            )}
+            {isOwner &&
+              !isDeregistered &&
+              spID &&
+              endpoint &&
+              serviceType &&
+              delegateOwnerWallet && (
+                <>
+                  <Button
+                    onClick={onClick}
+                    leftIcon={<IconPencil />}
+                    type={ButtonType.PRIMARY_ALT}
+                    text={messages.modify}
+                    className={clsx(styles.modifyBtn)}
+                    textClassName={styles.modifyBtnText}
+                  />
+                  <ModifyServiceModal
+                    isOpen={isOpen}
+                    onClose={onClose}
+                    spID={spID}
+                    serviceType={serviceType}
+                    endpoint={endpoint}
+                    delegateOwnerWallet={delegateOwnerWallet}
+                  />
+                </>
+              )}
           </div>
-        )}
-        {isOwner && !isDeregistered && (
-          <>
-            <Button
-              onClick={onClick}
-              leftIcon={<IconPencil />}
-              type={ButtonType.PRIMARY_ALT}
-              text={messages.modify}
-              className={clsx(styles.modifyBtn)}
-              textClassName={styles.modifyBtnText}
+          {endpoint ? (
+            <ServiceDetail label={messages.endpoint} value={endpoint} />
+          ) : null}
+          {operatorWallet ? (
+            <ServiceDetail label={messages.operator} value={operatorWallet} />
+          ) : null}
+          {delegateOwnerWallet ? (
+            <ServiceDetail
+              label={messages.delegate}
+              value={delegateOwnerWallet}
             />
-            <ModifyServiceModal
-              isOpen={isOpen}
-              onClose={onClose}
-              spID={spID}
-              serviceType={serviceType}
-              endpoint={endpoint}
-              delegateOwnerWallet={delegateOwnerWallet}
-            />
-          </>
-        )}
-      </div>
-      <ServiceDetail label={messages.endpoint} value={endpoint} />
-      <ServiceDetail label={messages.operator} value={operatorWallet} />
-      {delegateOwnerWallet && (
-        <ServiceDetail label={messages.delegate} value={delegateOwnerWallet} />
+          ) : null}
+        </>
       )}
     </Paper>
   )

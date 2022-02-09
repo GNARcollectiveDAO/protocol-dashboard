@@ -16,7 +16,8 @@ import {
   CountRecord,
   setTopApps,
   setTrailingTopGenres,
-  MetricError
+  MetricError,
+  setIndividualServiceApiCalls
 } from './slice'
 import { useEffect, useState } from 'react'
 import { DiscoveryProvider } from 'types'
@@ -24,7 +25,7 @@ import { useDiscoveryProviders } from '../discoveryProvider/hooks'
 import { useAverageBlockTime, useEthBlockNumber } from '../protocol/hooks'
 import { weiAudToAud } from 'utils/numeric'
 import { ELECTRONIC_SUB_GENRES } from './genres'
-import { fetchWithLibs } from '../../../utils/fetch'
+import { fetchWithLibs, fetchWithTimeout } from '../../../utils/fetch'
 dayjs.extend(duration)
 
 const MONTH_IN_MS = dayjs.duration({ months: 1 }).asMilliseconds()
@@ -119,13 +120,14 @@ export const getTrailingTopGenres = (
     : null
 export const getTopApps = (state: AppState, { bucket }: { bucket: Bucket }) =>
   state.cache.analytics.topApps ? state.cache.analytics.topApps[bucket] : null
+export const getIndividualServiceApiCalls = (
+  state: AppState,
+  { node, bucket }: { node: string; bucket: Bucket }
+) => state.cache.analytics.individualServiceApiCalls?.[node]?.[bucket] ?? null
 
 // -------------------------------- Thunk Actions  ---------------------------------
 
-async function fetchRoutesTimeSeries(
-  bucket: Bucket,
-  nodes: DiscoveryProvider[]
-) {
+async function fetchRoutesTimeSeries(bucket: Bucket) {
   let error = false
   let metric: TimeSeriesRecord[] = []
   try {
@@ -146,30 +148,46 @@ async function fetchRoutesTimeSeries(
 }
 
 export function fetchApiCalls(
-  bucket: Bucket,
-  nodes: DiscoveryProvider[]
+  bucket: Bucket
 ): ThunkAction<void, AppState, Audius, Action<string>> {
   return async dispatch => {
-    const metric = await fetchRoutesTimeSeries(bucket, nodes)
+    const metric = await fetchRoutesTimeSeries(bucket)
     dispatch(setApiCalls({ metric, bucket }))
   }
 }
 
+/**
+ * Fetches time series data from a discovery node
+ * @param route The route to fetch from (plays, routes)
+ * @param bucket The bucket size
+ * @param clampDays Whether or not to remove partial current day
+ * @param node An optional node to make the request against
+ * @returns the metric itself or a MetricError
+ */
 async function fetchTimeSeries(
   route: string,
   bucket: Bucket,
-  nodes: DiscoveryProvider[],
-  clampDays: boolean = true
+  clampDays: boolean = true,
+  node?: string
 ) {
   const startTime = getStartTime(bucket, clampDays)
   let error = false
   let metric: TimeSeriesRecord[] = []
   try {
     const bucketSize = BUCKET_GRANULARITY_MAP[bucket]
-    const data = await fetchWithLibs({
-      endpoint: `v1/metrics/${route}`,
-      queryParams: { bucket_size: bucketSize, start_time: startTime }
-    })
+    let data
+    if (node) {
+      data = (
+        await fetchWithTimeout(
+          `${node}/v1/metrics/${route}?bucket_size=${bucketSize}&start_time=${startTime}`
+        )
+      ).data.slice(1) // Trim off the first day so we don't show partial data
+    } else {
+      data = await fetchWithLibs({
+        endpoint: `v1/metrics/${route}`,
+        queryParams: { bucket_size: bucketSize, start_time: startTime }
+      })
+    }
     metric = data.reverse()
   } catch (e) {
     console.error(e)
@@ -183,17 +201,26 @@ async function fetchTimeSeries(
 }
 
 export function fetchPlays(
-  bucket: Bucket,
-  nodes: DiscoveryProvider[]
+  bucket: Bucket
 ): ThunkAction<void, AppState, Audius, Action<string>> {
   return async dispatch => {
-    let metric = await fetchTimeSeries('plays', bucket, nodes, true)
+    let metric = await fetchTimeSeries('plays', bucket, true)
     if (metric !== MetricError.ERROR) {
       metric = metric.filter(
         m => m.timestamp !== '1620345600' && m.timestamp !== '1620259200'
       )
     }
     dispatch(setPlays({ metric, bucket }))
+  }
+}
+
+export function fetchIndividualServiceRouteMetrics(
+  node: string,
+  bucket: Bucket
+): ThunkAction<void, AppState, Audius, Action<string>> {
+  return async dispatch => {
+    const metric = await fetchTimeSeries('routes', bucket, true, node)
+    dispatch(setIndividualServiceApiCalls({ node, metric, bucket }))
   }
 }
 
@@ -399,9 +426,31 @@ export const useApiCalls = (bucket: Bucket) => {
       (apiCalls === null || apiCalls === undefined)
     ) {
       setDoOnce(bucket)
-      dispatch(fetchApiCalls(bucket, nodes))
+      dispatch(fetchApiCalls(bucket))
     }
   }, [dispatch, apiCalls, bucket, nodes, doOnce])
+
+  useEffect(() => {
+    if (apiCalls) {
+      setDoOnce(null)
+    }
+  }, [apiCalls, setDoOnce])
+
+  return { apiCalls }
+}
+
+export const useIndividualServiceApiCalls = (node: string, bucket: Bucket) => {
+  const [doOnce, setDoOnce] = useState<Bucket | null>(null)
+  const apiCalls = useSelector(state =>
+    getIndividualServiceApiCalls(state as AppState, { node, bucket })
+  )
+  const dispatch = useDispatch()
+  useEffect(() => {
+    if (doOnce !== bucket && (apiCalls === null || apiCalls === undefined)) {
+      setDoOnce(bucket)
+      dispatch(fetchIndividualServiceRouteMetrics(node, bucket))
+    }
+  }, [dispatch, apiCalls, bucket, node, doOnce])
 
   useEffect(() => {
     if (apiCalls) {
@@ -460,7 +509,7 @@ export const usePlays = (bucket: Bucket) => {
       (plays === null || plays === undefined)
     ) {
       setDoOnce(bucket)
-      dispatch(fetchPlays(bucket, nodes))
+      dispatch(fetchPlays(bucket))
     }
   }, [dispatch, plays, bucket, nodes, doOnce])
 
